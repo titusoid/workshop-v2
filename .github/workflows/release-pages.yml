@@ -21,15 +21,16 @@ jobs:
         with: { node-version: 20, cache: "npm" }
       - run: npm ci
       - run: npm run build
-      - name: Generate SBOM (SPDX)
+      # stage dist/ plus reports/ into one folder
+      - name: Prepare Pages artifact
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
-          mkdir -p reports
-          syft dir:. -o spdx-json=reports/sbom.spdx.json
-      - name: Publish site & reports to Pages
-        uses: actions/upload-pages-artifact@v3
+          mkdir -p site
+          cp -r dist/* site/
+          if [ -d reports ]; then mkdir -p site/reports && cp -r reports/* site/reports/; fi
+      - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: site
+
   deploy:
     needs: build
     runs-on: ubuntu-latest

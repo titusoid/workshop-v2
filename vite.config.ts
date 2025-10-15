@@ -1,2 +1,2 @@
 import { defineConfig } from "vite";
-export default defineConfig({ base: "/supply-chain-radar/" });
+export default defineConfig({ base: "/workshop-v2/" }); // <- exact repo name
