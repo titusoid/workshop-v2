@@ -1,0 +1,35 @@
+name: Nightly SBOM Monitor
+on:
+  schedule:
+    - cron: "15 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  security-events: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install syft & grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+      - name: Generate SBOM
+        run: syft dir:. -o cyclonedx-json=reports/sbom.cdx.json
+      - name: Vulnerability scan
+        run: grype sbom:reports/sbom.cdx.json --output json > reports/grype.json || true
+      - name: Upload reports to Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: reports
+  deploy:
+    needs: scan
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
