@@ -15,13 +15,15 @@ async function loadJSON(path){
   return res.json();
 }
 
-async function loadData(){
-  const meta = document.getElementById('meta');
-  meta.textContent = 'Loading reports…';
-  try{
+const base = (import.meta.env && import.meta.env.BASE_URL) || "/";
+
+async function loadData() {
+  const meta = document.getElementById("meta");
+  meta.textContent = "Loading reports…";
+  try {
     const [sbom, grype] = await Promise.all([
-      loadJSON('/reports/sbom.cdx.json'),
-      loadJSON('/reports/grype.json')
+      loadJSON(base + "reports/sbom.cdx.json"),
+      loadJSON(base + "reports/grype.json")
     ]);
     state.sbom = sbom;
     state.grype = grype;
@@ -31,13 +33,14 @@ Vulnerabilities: ${state.vulns.length}
 Generated: ${(grype.descriptor && grype.descriptor.timestamp) || 'n/a'}`;
     drawCharts();
     renderTables();
-  }catch(e){
-    meta.textContent = 'No reports found. Using demo data.';
+  } catch (e) {
+    meta.textContent = "No reports found. Using demo data.";
     await loadDemo();
     drawCharts();
     renderTables();
   }
 }
+
 
 async function loadDemo(){
   const demoSBOM = {
