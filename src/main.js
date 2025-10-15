@@ -1,4 +1,6 @@
 import { renderSeverityChart, renderTypeChart } from './viz.js';
+import "./styles.css";
+
 
 const state = {
   sbom: null,
