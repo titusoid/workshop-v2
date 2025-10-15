@@ -1,7 +1,8 @@
 name: PR CI
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    branches: [ main ]
+    types: [ opened, synchronize, reopened, ready_for_review, labeled ]
 
 permissions:
   contents: read

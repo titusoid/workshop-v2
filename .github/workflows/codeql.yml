@@ -1,0 +1,93 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '30 3 * * 3' # weekly
+
+permissions:
+  contents: read
+  security-events: write   # upload alerts
+  pull-requests: write     # comment on PR
+
+jobs:
+  analyze:
+    name: Analyze with CodeQL
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: { language: [ 'javascript' ] }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # queries: security-extended,security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # PR-only summary comment of CodeQL findings
+  pr-comment:
+    if: ${{ github.event_name == 'pull_request' }}
+    needs: analyze
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      security-events: read
+    steps:
+      - name: Fetch CodeQL alerts for this PR head
+        id: fetch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Get alerts tied to the PR head commit
+          gh api repos/$REPO/code-scanning/alerts \
+            -f ref=$REF > alerts.json
+
+          # Build a compact markdown summary
+          total=$(jq 'length' alerts.json)
+          crit=$(jq '[.[]|select(.rule.severity=="critical")] | length' alerts.json)
+          high=$(jq '[.[]|select(.rule.severity=="high")]     | length' alerts.json)
+          med=$(jq  '[.[]|select(.rule.severity=="medium")]   | length' alerts.json)
+          low=$(jq  '[.[]|select(.rule.severity=="low")]      | length' alerts.json)
+
+          {
+            echo "### 🔐 CodeQL summary for this PR"
+            echo ""
+            echo "- Total alerts: **$total**  (Critical: **$crit**, High: **$high**, Medium: **$med**, Low: **$low**)"
+            echo ""
+            echo "| Severity | Rule | State | Link |"
+            echo "|---|---|---|---|"
+            # Top 10 rows
+            jq -r '.[] | [.rule.severity, .rule.id, .state, .html_url] | @tsv' alerts.json \
+              | head -n 10 \
+              | while IFS=$'\t' read -r sev rule state url; do
+                  echo "| ${sev^} | \`${rule}\` | ${state} | [view](${url}) |"
+                done
+            echo ""
+            echo "_Full list: Security → Code scanning alerts_"
+          } > comment.md
+
+          echo "COMMENT<<EOF" >> $GITHUB_OUTPUT
+          cat comment.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post sticky PR comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: codeql-summary
+          message: ${{ steps.fetch.outputs.COMMENT }}
