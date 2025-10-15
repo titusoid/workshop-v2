@@ -1,0 +1,25 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "name": "react",
+      "version": "18.2.0",
+      "type": "library"
+    },
+    {
+      "name": "vite",
+      "version": "5.4.0",
+      "type": "application"
+    },
+    {
+      "name": "eslint",
+      "version": "9.13.0",
+      "type": "library"
+    },
+    {
+      "name": "prettier",
+      "version": "3.3.3",
+      "type": "library"
+    }
+  ]
+}

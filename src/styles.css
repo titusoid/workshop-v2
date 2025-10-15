@@ -1,0 +1,39 @@
+:root{
+  --bg: #0f1116;
+  --card: #161a22cc;
+  --muted: #9aa4b2;
+  --text: #e6eaf2;
+  --accent: #7aa2f7;
+  --ok: #10b981;
+  --warn: #f59e0b;
+  --err: #ef4444;
+  --crit: #dc2626;
+}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 600px at 10% -10%, #1b2030 0, var(--bg) 50%);color:var(--text);font:14px/1.5 system-ui,Segoe UI,Roboto,Inter,Arial}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;background:#0b0d12cc;backdrop-filter: blur(6px);position:sticky;top:0;border-bottom:1px solid #202634}
+h1{margin:0;font-size:20px;letter-spacing:.3px}
+nav .tab{background:#111520;color:#cbd5e1;border:1px solid #263045;padding:8px 12px;margin-left:8px;border-radius:10px;cursor:pointer}
+nav .tab.active{border-color:var(--accent);color:#fff}
+.container{padding:24px;max-width:1100px;margin:0 auto}
+.grid{display:grid;gap:16px;grid-template-columns: repeat(12,1fr)}
+.card{grid-column: span 6;background:var(--card);border:1px solid #263045;border-radius:16px;padding:16px;min-height:220px;box-shadow: 0 4px 24px #0004}
+.card h2{margin:0 0 10px 0;font-size:16px;color:#dbe3f4}
+.card:nth-child(3){grid-column: span 12}
+.chart{height:180px}
+.meta{white-space:pre-wrap;color:var(--muted)}
+.panel{display:none}
+.panel.visible{display:block}
+.toolbar{display:flex;gap:12px;margin:10px 0}
+input,select{background:#0e1320;border:1px solid #263045;color:#e2e8f0;padding:8px 10px;border-radius:10px}
+.data-table{width:100%;border-collapse:collapse;background:var(--card);border-radius:12px;overflow:hidden}
+.data-table th,.data-table td{padding:10px;border-bottom:1px solid #263045;text-align:left}
+.data-table th{background:#101623;color:#cbd5e1;font-weight:600}
+.badge{padding:2px 8px;border-radius:999px;border:1px solid #263045}
+.badge.Low{background:#142915;color:#86efac}
+.badge.Medium{background:#2a2314;color:#facc15}
+.badge.High{background:#2a1515;color:#fca5a5}
+.badge.Critical{background:#2a0f11;color:#fecaca}
+.foot{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-top:1px solid #202634;color:#94a3b8}
+button#reload{background:#0e1320;border:1px solid #263045;color:#e2e8f0;padding:8px 10px;border-radius:10px;cursor:pointer}
+@media (max-width:900px){.card{grid-column: span 12}}

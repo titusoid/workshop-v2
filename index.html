@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Supply Chain Radar</title>
+  <link rel="stylesheet" href="/src/styles.css">
+  <meta name="color-scheme" content="dark light">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Supply Chain Radar</h1>
+    <nav>
+      <button id="tab-dashboard" class="tab active">Dashboard</button>
+      <button id="tab-vulns" class="tab">Vulnerabilities</button>
+      <button id="tab-packages" class="tab">Packages</button>
+    </nav>
+  </header>
+
+  <main id="app" class="container">
+    <section id="dashboard" class="panel visible">
+      <div class="grid">
+        <div class="card">
+          <h2>Severity Overview</h2>
+          <div id="severityChart" class="chart"></div>
+        </div>
+        <div class="card">
+          <h2>Package Types</h2>
+          <div id="typeChart" class="chart"></div>
+        </div>
+        <div class="card">
+          <h2>Report Info</h2>
+          <div id="meta" class="meta"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="vulns" class="panel">
+      <div class="toolbar">
+        <input id="vulnFilter" placeholder="Filter by package or CVE…" />
+        <select id="sevFilter">
+          <option value="">All severities</option>
+          <option>Critical</option>
+          <option>High</option>
+          <option>Medium</option>
+          <option>Low</option>
+        </select>
+      </div>
+      <table id="vulnTable" class="data-table"></table>
+    </section>
+
+    <section id="packages" class="panel">
+      <div class="toolbar">
+        <input id="pkgFilter" placeholder="Filter packages…" />
+      </div>
+      <table id="pkgTable" class="data-table"></table>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>Data source: <code>reports/sbom.cdx.json</code> & <code>reports/grype.json</code></span>
+    <button id="reload">Reload</button>
+  </footer>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

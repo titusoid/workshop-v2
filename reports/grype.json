@@ -1,0 +1,37 @@
+{
+  "matches": [
+    {
+      "vulnerability": {
+        "id": "CVE-2024-1234",
+        "severity": "High"
+      },
+      "artifact": {
+        "name": "react",
+        "version": "18.2.0"
+      }
+    },
+    {
+      "vulnerability": {
+        "id": "CVE-2025-1111",
+        "severity": "Medium"
+      },
+      "artifact": {
+        "name": "vite",
+        "version": "5.4.0"
+      }
+    },
+    {
+      "vulnerability": {
+        "id": "CVE-2023-9999",
+        "severity": "Low"
+      },
+      "artifact": {
+        "name": "eslint",
+        "version": "9.13.0"
+      }
+    }
+  ],
+  "descriptor": {
+    "timestamp": "2025-10-10T10:10:10Z"
+  }
+}
