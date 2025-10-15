@@ -18,16 +18,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: "npm" }
-      - run: npm ci
-      - run: npm run build
-      # stage dist/ plus reports/ into one folder
+        with:
+          node-version: 20
+          cache: "npm"
+
+      # 1️⃣ Install & build frontend
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app
+        run: npm run build
+
+      # 2️⃣ Generate SBOM + vulnerability scan
+      - name: Install Syft & Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate SBOMs
+        run: |
+          mkdir -p reports
+          syft dir:. -o spdx-json=reports/sbom.spdx.json
+          syft dir:. -o cyclonedx-json=reports/sbom.cdx.json
+
+      - name: Run vulnerability scan (Grype)
+        run: |
+          grype sbom:reports/sbom.cdx.json --output json > reports/grype.json || true
+
+      # 3️⃣ Stage build + reports for Pages
       - name: Prepare Pages artifact
         run: |
-          mkdir -p site
+          mkdir -p site/reports
           cp -r dist/* site/
-          if [ -d reports ]; then mkdir -p site/reports && cp -r reports/* site/reports/; fi
-      - uses: actions/upload-pages-artifact@v3
+          cp -r reports/* site/reports/
+
+      - name: Upload to Pages
+        uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
