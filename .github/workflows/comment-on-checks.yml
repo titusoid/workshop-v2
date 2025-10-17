@@ -1,0 +1,82 @@
+name: Comment why checks failed
+
+on:
+  check_suite:
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find PR for this commit
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+          SHA:      ${{ github.event.check_suite.head_sha }}
+        run: |
+          num=$(gh api repos/$REPO/pulls --jq ".[] | select(.state==\"open\" and .head.sha==\"$SHA\") | .number" | head -n1)
+          echo "num=$num" >> $GITHUB_OUTPUT
+          if [ -z "$num" ]; then
+            echo "No open PR for this commit."
+            exit 0
+          fi
+
+      - name: Build comment about failing/pending checks
+        if: ${{ steps.pr.outputs.num != '' }}
+        id: build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+          SHA:      ${{ github.event.check_suite.head_sha }}
+        run: |
+          # Combined state: success / failure / pending
+          state=$(gh api repos/$REPO/commits/$SHA/status --jq .state)
+          runs=$(gh api repos/$REPO/commits/$SHA/check-runs -H "Accept: application/vnd.github+json")
+
+          # Collect non-success checks
+          jq -r '
+            .check_runs[]
+            | select(.conclusion != "success")
+            | [.name, (.conclusion // .status), .html_url]
+            | @tsv
+          ' <<<"$runs" > failing.tsv
+
+          if [ "$state" = "success" ] || [ ! -s failing.tsv ]; then
+            echo "COMMENT<<EOF" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            echo "ok=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          {
+            echo "Some checks failed or are pending:"
+            echo ""
+            echo "| Check | Status | Link |"
+            echo "|---|---|---|"
+            while IFS=$'\t' read -r name status url; do
+              printf "| %s | %s | [view](%s) |\n" "$name" "$status" "$url"
+            done < failing.tsv
+          } > comment.md
+
+          echo "COMMENT<<EOF" >> $GITHUB_OUTPUT
+          cat comment.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "ok=false" >> $GITHUB_OUTPUT
+
+      - name: Post or clear sticky comment
+        if: ${{ steps.pr.outputs.num != '' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: checks-status
+          number: ${{ steps.pr.outputs.num }}
+          message: ${{ steps.build.outputs.COMMENT }}
+
+      - name: Remove comment when everything is green
+        if: ${{ steps.pr.outputs.num != '' && steps.build.outputs.ok == 'true' }}
+        run: echo "All checks passed; sticky comment cleared."
