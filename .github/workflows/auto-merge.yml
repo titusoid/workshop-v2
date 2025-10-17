@@ -1,13 +1,9 @@
-name: Merge when approved, labeled, and green
+name: Merge when labeled and green
 
 on:
   pull_request:
     branches: [ main ]
     types: [labeled, synchronize, reopened, ready_for_review]
-  pull_request_review:
-    types: [submitted]
-  check_suite:
-    types: [completed]
 
 permissions:
   contents: write
@@ -15,69 +11,78 @@ permissions:
 
 jobs:
   merge:
+    # Only start when the merge label is present and it's a real PR to main (not draft)
+    if: >
+      github.event.pull_request.base.ref == 'main' &&
+      !github.event.pull_request.draft &&
+      contains(github.event.pull_request.labels.*.name, 'merge')
     runs-on: ubuntu-latest
+
     steps:
-      - name: Determine PR number and head SHA
-        id: ctx
+      - name: Check approvals (>=1)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO:     ${{ github.repository }}
+          NUM:      ${{ github.event.pull_request.number }}
         run: |
-          set -euo pipefail
-          case "${{ github.event_name }}" in
-            pull_request|pull_request_review)
-              echo "num=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-              echo "sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
-              ;;
-            check_suite)
-              sha="${{ github.event.check_suite.head_sha }}"
-              num=$(gh api repos/$REPO/pulls --jq ".[] | select(.state==\"open\" and .head.sha==\"$sha\") | .number" | head -n1)
-              [ -n "$num" ] || { echo "No open PR for this commit"; exit 1; }
-              echo "num=$num" >> $GITHUB_OUTPUT
-              echo "sha=$sha"  >> $GITHUB_OUTPUT
-              ;;
-          esac
+          count=$(gh pr view "$NUM" --repo "$REPO" --json reviews \
+            --jq '[.reviews[] | select(.state=="APPROVED") | .author.login] | unique | length')
+          echo "Approvals: $count"
+          if [ "$count" -lt 1 ]; then
+            echo "PR does not have the required approval(s)."
+            exit 1
+          fi
 
-      - name: Load PR details
-        id: pr
+      - name: Wait for all required checks to succeed (combined status)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO:     ${{ github.repository }}
-          NUM:      ${{ steps.ctx.outputs.num }}
+          SHA:      ${{ github.event.pull_request.head.sha }}
         run: |
-          gh pr view "$NUM" --repo "$REPO" \
-            --json number,baseRefName,isDraft,labels,reviews > pr.json
-          echo "base=$(jq -r .baseRefName pr.json)" >> $GITHUB_OUTPUT
-          echo "draft=$(jq -r .isDraft pr.json)"    >> $GITHUB_OUTPUT
-          echo "labels=$(jq -r '[.labels[].name] | join(\",\")' pr.json)" >> $GITHUB_OUTPUT
-          echo "approvals=$(jq '[.reviews[] | select(.state==\"APPROVED\") | .author.login] | unique | length' pr.json)" >> $GITHUB_OUTPUT
+          # Poll the combined status until it's "success" or fails/times out
+          # Timeout ~10 minutes (60 * 10s)
+          attempts=60
+          sleep_secs=10
 
-      - name: Require base main, not draft, has 'merge' label, approvals ≥ 1
-        run: |
-          ok=true
-          [ "${{ steps.pr.outputs.base }}" = "main" ]   || { echo "Base not main"; ok=false; }
-          [ "${{ steps.pr.outputs.draft }}" = "false" ] || { echo "PR is draft"; ok=false; }
-          case ",${{ steps.pr.outputs.labels }}," in
-            *,merge,*) ;; *) echo "Missing 'merge' label"; ok=false ;;
-          esac
-          [ "${{ steps.pr.outputs.approvals }}" -ge 1 ] || { echo "No approvals"; ok=false; }
-          [ "$ok" = "true" ] || exit 1
+          echo "Waiting for required checks on $SHA ..."
+          for i in $(seq 1 $attempts); do
+            state=$(gh api repos/$REPO/commits/$SHA/status --jq .state)
+            echo "Attempt $i: combined status = $state"
+            case "$state" in
+              success)
+                echo "All required checks passed."
+                break
+                ;;
+              failure|error)
+                echo "One or more required checks failed."
+                # Print failing/pending check-runs for quick diagnostics
+                gh api repos/$REPO/commits/$SHA/check-runs -H "Accept: application/vnd.github+json" \
+                  --jq '.check_runs[] | select(.conclusion!="success") | {name, conclusion, status, html_url}'
+                exit 1
+                ;;
+              *)
+                # pending / null / intermediate → keep waiting
+                sleep $sleep_secs
+                ;;
+            esac
 
-      - name: Require all required checks passed (combined)
-        id: checks
+            if [ "$state" = "success" ]; then
+              break
+            fi
+          done
+
+          if [ "$state" != "success" ]; then
+            echo "Timed out waiting for required checks to pass."
+            # Show current non-success check runs to help debugging
+            gh api repos/$REPO/commits/$SHA/check-runs -H "Accept: application/vnd.github+json" \
+              --jq '.check_runs[] | select(.conclusion!="success") | {name, conclusion, status, html_url}'
+            exit 1
+          fi
+
+      - name: Merge PR (squash and delete branch)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO:     ${{ github.repository }}
-          SHA:      ${{ steps.ctx.outputs.sha }}
-        run: |
-          state=$(gh api repos/$REPO/commits/$SHA/status --jq .state)
-          echo "Combined status: $state"
-          [ "$state" = "success" ] || { echo "Checks not all green"; exit 1; }
-
-      - name: Merge (squash and delete branch)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO:     ${{ github.repository }}
-          NUM:      ${{ steps.ctx.outputs.num }}
+          NUM:      ${{ github.event.pull_request.number }}
         run: |
           gh pr merge "$NUM" --repo "$REPO" --squash --delete-branch --admin=false
