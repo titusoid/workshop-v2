@@ -1,82 +1,105 @@
-name: Comment why checks failed
+name: Comment on failing checks
 
 on:
-  check_suite:
+  workflow_run:
+    workflows: ["PR CI", "CodeQL"]   # which workflows to watch
     types: [completed]
 
 permissions:
   contents: read
   pull-requests: write
+  actions: read
 
 jobs:
   report:
+    # only care about PR-triggered runs and when they finished (success or fail)
+    if: ${{ github.event.workflow_run.event == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Find PR for this commit
-        id: pr
+      - name: Determine PR number and gather failing jobs
+        id: gather
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO:     ${{ github.repository }}
-          SHA:      ${{ github.event.check_suite.head_sha }}
+          RUN_ID:   ${{ github.event.workflow_run.id }}
         run: |
-          num=$(gh api repos/$REPO/pulls --jq ".[] | select(.state==\"open\" and .head.sha==\"$SHA\") | .number" | head -n1)
-          echo "num=$num" >> $GITHUB_OUTPUT
-          if [ -z "$num" ]; then
-            echo "No open PR for this commit."
-            exit 0
+          set -euo pipefail
+
+          # Prefer PR number from the event payload
+          pr_number=$(jq -r '.workflow_run.pull_requests[0].number // empty' <<< '${{ toJson(github.event) }}')
+
+          # Fallback: map head_sha -> open PR (rarely needed)
+          if [ -z "$pr_number" ]; then
+            sha="${{ github.event.workflow_run.head_sha }}"
+            pr_number=$(gh api repos/$REPO/pulls --jq ".[] | select(.state==\"open\" and .head.sha==\"$sha\") | .number" | head -n1)
           fi
 
-      - name: Build comment about failing/pending checks
-        if: ${{ steps.pr.outputs.num != '' }}
-        id: build
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO:     ${{ github.repository }}
-          SHA:      ${{ github.event.check_suite.head_sha }}
-        run: |
-          # Combined state: success / failure / pending
-          state=$(gh api repos/$REPO/commits/$SHA/status --jq .state)
-          runs=$(gh api repos/$REPO/commits/$SHA/check-runs -H "Accept: application/vnd.github+json")
-
-          # Collect non-success checks
-          jq -r '
-            .check_runs[]
-            | select(.conclusion != "success")
-            | [.name, (.conclusion // .status), .html_url]
-            | @tsv
-          ' <<<"$runs" > failing.tsv
-
-          if [ "$state" = "success" ] || [ ! -s failing.tsv ]; then
-            echo "COMMENT<<EOF" >> $GITHUB_OUTPUT
-            echo "" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
-            echo "ok=true" >> $GITHUB_OUTPUT
+          if [ -z "$pr_number" ]; then
+            echo "No open PR associated with this workflow run."
+            echo "pr=" >> $GITHUB_OUTPUT
             exit 0
           fi
+          echo "pr=$pr_number" >> $GITHUB_OUTPUT
 
-          {
-            echo "Some checks failed or are pending:"
-            echo ""
-            echo "| Check | Status | Link |"
-            echo "|---|---|---|"
-            while IFS=$'\t' read -r name status url; do
-              printf "| %s | %s | [view](%s) |\n" "$name" "$status" "$url"
-            done < failing.tsv
-          } > comment.md
+          # Fetch all jobs from this run
+          jobs_json=$(gh api repos/$REPO/actions/runs/$RUN_ID/jobs --paginate)
+          echo "$jobs_json" | jq '[.jobs[] | {name, conclusion, html_url}]' > jobs.json
 
-          echo "COMMENT<<EOF" >> $GITHUB_OUTPUT
-          cat comment.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "ok=false" >> $GITHUB_OUTPUT
+          # Build a TSV with only non-success jobs (failure, cancelled, timed_out, neutral, skipped)
+          jq -r '.[] | select(.conclusion != "success") | [.name, .conclusion, .html_url] | @tsv' jobs.json > failing.tsv || true
 
-      - name: Post or clear sticky comment
-        if: ${{ steps.pr.outputs.num != '' }}
+          # Expose whether the run succeeded overall
+          echo "run_conclusion=${{ github.event.workflow_run.conclusion }}" >> $GITHUB_OUTPUT
+
+      - name: Post/update sticky comment with failing checks
+        if: ${{ steps.gather.outputs.pr != '' && steps.gather.outputs.run_conclusion != 'success' }}
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: checks-status
-          number: ${{ steps.pr.outputs.num }}
-          message: ${{ steps.build.outputs.COMMENT }}
+          number: ${{ steps.gather.outputs.pr }}
+          message: |
+            The workflow **${{ github.event.workflow_run.name }}** failed for this PR.
 
-      - name: Remove comment when everything is green
-        if: ${{ steps.pr.outputs.num != '' && steps.build.outputs.ok == 'true' }}
-        run: echo "All checks passed; sticky comment cleared."
+            | Check job | Status | Link |
+            |---|---|---|
+            ${{ steps.gather.outputs.TABLE }}
+        env:
+          # Build a Markdown table from failing.tsv (evaluated server-side)
+          TABLE: ${{ steps.gather.outputs.pr }}
+        # The action can't build the table by itself; generate message via a short run step:
+      - name: Build message body
+        if: ${{ steps.gather.outputs.pr != '' && steps.gather.outputs.run_conclusion != 'success' }}
+        id: body
+        run: |
+          {
+            echo "The workflow **${{ github.event.workflow_run.name }}** failed for this PR."
+            echo
+            echo "| Check job | Status | Link |"
+            echo "|---|---|---|"
+            if [ -s failing.tsv ]; then
+              while IFS=$'\t' read -r name status url; do
+                printf "| %s | %s | [view](%s) |\n" "$name" "$status" "$url"
+              done < failing.tsv
+            else
+              echo "| (none) | (none) | |"
+            fi
+          } > comment.md
+          echo "COMMENT<<EOF" >> $GITHUB_OUTPUT
+          cat comment.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post/update sticky comment (final)
+        if: ${{ steps.gather.outputs.pr != '' && steps.gather.outputs.run_conclusion != 'success' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: checks-status
+          number: ${{ steps.gather.outputs.pr }}
+          message: ${{ steps.body.outputs.COMMENT }}
+
+      - name: Clear comment when all checks pass
+        if: ${{ steps.gather.outputs.pr != '' && steps.gather.outputs.run_conclusion == 'success' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: checks-status
+          number: ${{ steps.gather.outputs.pr }}
+          message: ""   # empty message removes the sticky comment
