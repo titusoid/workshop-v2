@@ -1,21 +1,77 @@
-name: Auto-merge labeled PRs
+name: Merge when labeled and approved
+
 on:
   pull_request:
-    branches: [ main ]
-    types: [labeled, edited, ready_for_review, synchronize, reopened]
+    types: [labeled]   # only run when a label is added
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
-  merge-when-approved:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'merge') && !github.event.pull_request.draft }}
+  merge:
+    if: >
+      github.event.label.name == 'merge' &&
+      github.event.pull_request.base.ref == 'main' &&
+      !github.event.pull_request.draft
     runs-on: ubuntu-latest
+
     steps:
-      - name: Merge PR
-        uses: pascalgn/automerge-action@v0.16.3
+      - name: Require at least one approval
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MERGE_LABELS: "merge"
-          MERGE_METHOD: "squash"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+          NUM:      ${{ github.event.pull_request.number }}
+        run: |
+          count=$(gh pr view "$NUM" --repo "$REPO" --json reviews \
+            --jq '[.reviews[] | select(.state=="APPROVED") | .author.login] | unique | length')
+          echo "Approvals: $count"
+          if [ "$count" -lt 1 ]; then
+            echo "No approvals yet. Approve the PR and re-add the 'merge' label to retry."
+            exit 1
+          fi
+
+      - name: Wait for required checks to pass (branch protection)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+          SHA:      ${{ github.event.pull_request.head.sha }}
+        run: |
+          attempts=120   # ~20 minutes total
+          sleep_secs=10
+
+          echo "Waiting for required checks on $SHA ..."
+          for i in $(seq 1 $attempts); do
+            state=$(gh api repos/$REPO/commits/$SHA/status --jq .state)
+            echo "Attempt $i: combined status = $state"
+            case "$state" in
+              success)
+                echo "All required checks passed."
+                break
+                ;;
+              failure|error)
+                echo "A required check failed. Details:"
+                gh api repos/$REPO/commits/$SHA/check-runs -H "Accept: application/vnd.github+json" \
+                  --jq '.check_runs[] | select(.conclusion!="success") | {name, conclusion, status, html_url}'
+                exit 1
+                ;;
+              *)
+                sleep $sleep_secs
+                ;;
+            esac
+          done
+
+          if [ "$state" != "success" ]; then
+            echo "Timed out waiting for checks to pass."
+            gh api repos/$REPO/commits/$SHA/check-runs -H "Accept: application/vnd.github+json" \
+              --jq '.check_runs[] | select(.conclusion!="success") | {name, conclusion, status, html_url}'
+            exit 1
+          fi
+
+      - name: Merge (squash and delete branch)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+          NUM:      ${{ github.event.pull_request.number }}
+        run: |
+          gh pr merge "$NUM" --repo "$REPO" --squash --delete-branch --admin=false
