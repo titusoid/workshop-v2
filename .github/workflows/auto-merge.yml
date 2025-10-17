@@ -1,21 +1,36 @@
-name: Auto-merge labeled PRs
+name: Enable GitHub Auto-merge on labeled PR
+
 on:
   pull_request:
     branches: [ main ]
-    types: [labeled, edited, ready_for_review, synchronize, reopened]
+    types: [labeled, edited, ready_for_review, reopened, synchronize]
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 jobs:
-  merge-when-approved:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'merge') && !github.event.pull_request.draft }}
+  enable:
+    if: >
+      !github.event.pull_request.draft &&
+      contains(github.event.pull_request.labels.*.name, 'merge') &&
+      github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     steps:
-      - name: Merge PR
-        uses: pascalgn/automerge-action@v0.16.3
+      - name: Ensure at least 1 approval
+        id: approvals
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MERGE_LABELS: "merge"
-          MERGE_METHOD: "squash"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUM:  ${{ github.event.pull_request.number }}
+        run: |
+          approved=$(gh api repos/$REPO/pulls/$NUM/reviews \
+            --jq '[ .[] | select(.state=="APPROVED") | .user.login ] | unique | length')
+          echo "count=$approved" >> $GITHUB_OUTPUT
+
+      - name: Enable Auto-merge (squash) if approved
+        if: ${{ steps.approvals.outputs.count >= 1 }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge ${{ github.event.pull_request.number }} --auto --squash
