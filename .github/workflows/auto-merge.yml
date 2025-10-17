@@ -1,4 +1,4 @@
-name: Merge when ready
+name: Merge when approved, labeled, and green
 
 on:
   pull_request:
@@ -15,29 +15,69 @@ permissions:
 
 jobs:
   merge:
-    name: Auto merge if ready
     runs-on: ubuntu-latest
-    if: |
-      github.event_name != 'check_suite' &&
-      github.event.pull_request.base.ref == 'main' &&
-      !github.event.pull_request.draft &&
-      contains(github.event.pull_request.labels.*.name, 'merge')
     steps:
-      - name: Merge PR (squash and delete branch) if all checks passed and approved
+      - name: Determine PR number and head SHA
+        id: ctx
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO:     ${{ github.repository }}
-          NUM:      ${{ github.event.pull_request.number }}
-          SHA:      ${{ github.event.pull_request.head.sha }}
         run: |
-          # Count approvals
-          approvals=$(gh pr view "$NUM" --repo "$REPO" --json reviews \
-            --jq '[.reviews[] | select(.state=="APPROVED")] | length')
-          [ "$approvals" -ge 1 ] || { echo "No approvals yet"; exit 0; }
+          set -euo pipefail
+          case "${{ github.event_name }}" in
+            pull_request|pull_request_review)
+              echo "num=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+              echo "sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
+              ;;
+            check_suite)
+              sha="${{ github.event.check_suite.head_sha }}"
+              num=$(gh api repos/$REPO/pulls --jq ".[] | select(.state==\"open\" and .head.sha==\"$sha\") | .number" | head -n1)
+              [ -n "$num" ] || { echo "No open PR for this commit"; exit 1; }
+              echo "num=$num" >> $GITHUB_OUTPUT
+              echo "sha=$sha"  >> $GITHUB_OUTPUT
+              ;;
+          esac
 
-          # Ensure all required checks succeeded
+      - name: Load PR details
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+          NUM:      ${{ steps.ctx.outputs.num }}
+        run: |
+          gh pr view "$NUM" --repo "$REPO" \
+            --json number,baseRefName,isDraft,labels,reviews > pr.json
+          echo "base=$(jq -r .baseRefName pr.json)" >> $GITHUB_OUTPUT
+          echo "draft=$(jq -r .isDraft pr.json)"    >> $GITHUB_OUTPUT
+          echo "labels=$(jq -r '[.labels[].name] | join(\",\")' pr.json)" >> $GITHUB_OUTPUT
+          echo "approvals=$(jq '[.reviews[] | select(.state==\"APPROVED\") | .author.login] | unique | length' pr.json)" >> $GITHUB_OUTPUT
+
+      - name: Require base main, not draft, has 'merge' label, approvals ≥ 1
+        run: |
+          ok=true
+          [ "${{ steps.pr.outputs.base }}" = "main" ]   || { echo "Base not main"; ok=false; }
+          [ "${{ steps.pr.outputs.draft }}" = "false" ] || { echo "PR is draft"; ok=false; }
+          case ",${{ steps.pr.outputs.labels }}," in
+            *,merge,*) ;; *) echo "Missing 'merge' label"; ok=false ;;
+          esac
+          [ "${{ steps.pr.outputs.approvals }}" -ge 1 ] || { echo "No approvals"; ok=false; }
+          [ "$ok" = "true" ] || exit 1
+
+      - name: Require all required checks passed (combined)
+        id: checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+          SHA:      ${{ steps.ctx.outputs.sha }}
+        run: |
           state=$(gh api repos/$REPO/commits/$SHA/status --jq .state)
-          [ "$state" = "success" ] || { echo "Checks not all green"; exit 0; }
+          echo "Combined status: $state"
+          [ "$state" = "success" ] || { echo "Checks not all green"; exit 1; }
 
-          # Merge
+      - name: Merge (squash and delete branch)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+          NUM:      ${{ steps.ctx.outputs.num }}
+        run: |
           gh pr merge "$NUM" --repo "$REPO" --squash --delete-branch --admin=false

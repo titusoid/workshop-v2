@@ -1,0 +1,46 @@
+name: Recheck PR
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+
+jobs:
+  recheck:
+    if: >
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, 'recheck')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find PR number and head SHA
+        id: ctx
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+        run: |
+          pr=${{ github.event.issue.number }}
+          sha=$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq .headRefOid)
+          echo "num=$pr"  >> $GITHUB_OUTPUT
+          echo "sha=$sha" >> $GITHUB_OUTPUT
+
+      - name: Re-run PR CI and CodeQL for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+          SHA:      ${{ steps.ctx.outputs.sha }}
+        run: |
+          gh api repos/$REPO/actions/runs \
+            --jq '[.workflow_runs[] | select(.head_sha=="'"$SHA"'" and .event=="pull_request") | {id, name}]' > runs.json
+          for n in "PR CI" "CodeQL"; do
+            id=$(jq -r '.[] | select(.name=="'"$n"'") | .id' runs.json | head -n1)
+            if [ -n "$id" ] && [ "$id" != "null" ]; then
+              gh api -X POST repos/$REPO/actions/runs/$id/rerun >/dev/null
+              echo "Re-ran: $n (#$id)"
+            else
+              echo "No existing run for: $n"
+            fi
+          done
