@@ -1,12 +1,8 @@
-# .github/workflows/merge-on-merge-label.yml
 name: Merge when labeled and approved
 
 on:
   pull_request:
-    branches: [ main ]
-    types: [labeled, synchronize, reopened, ready_for_review]
-  check_suite:
-    types: [completed]
+    types: [labeled]
 
 permissions:
   contents: write
@@ -14,51 +10,33 @@ permissions:
 
 jobs:
   merge:
+    # Only start when the merge label is applied
+    if: >
+      github.event.label.name == 'merge' &&
+      github.event.pull_request.base.ref == 'main' &&
+      !github.event.pull_request.draft
     runs-on: ubuntu-latest
+
     steps:
-      - name: Resolve PR number and SHA
-        id: ctx
+      - name: Require at least one approval
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          NUM:  ${{ github.event.pull_request.number }}
         run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "num=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-            echo "sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
-          else
-            sha="${{ github.event.check_suite.head_sha }}"
-            num=$(gh api repos/$REPO/pulls --jq ".[] | select(.state==\"open\" and .head.sha==\"$sha\") | .number" | head -n1)
-            [ -n "$num" ] || { echo "No open PR for this commit"; exit 0; }
-            echo "num=$num" >> $GITHUB_OUTPUT
-            echo "sha=$sha"  >> $GITHUB_OUTPUT
+          count=$(gh pr view "$NUM" --repo "$REPO" --json reviews \
+            --jq '[.reviews[] | select(.state=="APPROVED") | .author.login] | unique | length')
+          echo "Approvals: $count"
+          if [ "$count" -lt 1 ]; then
+            echo "No approvals yet. Add an approval and re-add the 'merge' label to retry."
+            exit 1
           fi
 
-      - name: Load PR state
-        id: pr
+      - name: Merge (branch protection enforces checks)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          NUM:  ${{ steps.ctx.outputs.num }}
+          NUM:  ${{ github.event.pull_request.number }}
         run: |
-          gh pr view "$NUM" --repo "$REPO" \
-            --json baseRefName,isDraft,labels,reviews > pr.json
-          echo "base=$(jq -r .baseRefName pr.json)" >> $GITHUB_OUTPUT
-          echo "draft=$(jq -r .isDraft pr.json)"    >> $GITHUB_OUTPUT
-          echo "has_merge_label=$(jq -r '[.labels[].name] | index(\"merge\") != null' pr.json)" >> $GITHUB_OUTPUT
-          echo "approvals=$(jq '[.reviews[] | select(.state==\"APPROVED\")] | length' pr.json)" >> $GITHUB_OUTPUT
-
-      - name: Gate main, not draft, merge label, approvals ≥ 1
-        run: |
-          [ "${{ steps.pr.outputs.base }}" = "main" ] || { echo "Base not main"; exit 1; }
-          [ "${{ steps.pr.outputs.draft }}" = "false" ] || { echo "Draft PR"; exit 1; }
-          [ "${{ steps.pr.outputs.has_merge_label }}" = "true" ] || { echo "Missing 'merge' label"; exit 1; }
-          [ "${{ steps.pr.outputs.approvals }}" -ge 1 ] || { echo "No approvals"; exit 1; }
-
-      - name: Merge (branch protection enforces required checks)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          NUM:  ${{ steps.ctx.outputs.num }}
-        run: |
+          echo "Attempting to merge PR #$NUM..."
           gh pr merge "$NUM" --repo "$REPO" --squash --delete-branch --admin=false
