@@ -1,4 +1,4 @@
-name: Enable GitHub Auto-merge on labeled PR
+name: Enable Auto-merge when ready
 
 on:
   pull_request:
@@ -10,14 +10,40 @@ permissions:
   pull-requests: write
 
 jobs:
-  enable:
-    if: >
-      !github.event.pull_request.draft &&
-      contains(github.event.pull_request.labels.*.name, 'merge') &&
-      github.event.pull_request.base.ref == 'main'
+  enable-auto-merge:
+    name: Enable GitHub Auto-merge
     runs-on: ubuntu-latest
     steps:
-      - name: Ensure at least 1 approval
+      - name: Check merge preconditions
+        id: precheck
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          DRAFT:  ${{ github.event.pull_request.draft }}
+          BASE:   ${{ github.event.pull_request.base.ref }}
+        run: |
+          echo "Labels: $LABELS"
+          echo "Draft:  $DRAFT"
+          echo "Base:   $BASE"
+          ok=true
+          if [ "$DRAFT" = "true" ]; then
+            echo "PR is draft."
+            ok=false
+          fi
+          if [ "$BASE" != "main" ]; then
+            echo "PR base is not main."
+            ok=false
+          fi
+          case ",$LABELS," in
+            *,merge,*) echo "Merge label present." ;;
+            *) echo "Missing 'merge' label."; ok=false ;;
+          esac
+          echo "ok=$ok" >> $GITHUB_OUTPUT
+          if [ "$ok" != "true" ]; then
+            echo "Auto-merge prerequisites not met."
+            exit 1
+          fi
+
+      - name: Check approvals
         id: approvals
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -26,11 +52,16 @@ jobs:
         run: |
           approved=$(gh api repos/$REPO/pulls/$NUM/reviews \
             --jq '[ .[] | select(.state=="APPROVED") | .user.login ] | unique | length')
+          echo "Approvals: $approved"
           echo "count=$approved" >> $GITHUB_OUTPUT
+          if [ "$approved" -lt 1 ]; then
+            echo "No approvals yet."
+            exit 1
+          fi
 
-      - name: Enable Auto-merge (squash) if approved
-        if: ${{ steps.approvals.outputs.count >= 1 }}
+      - name: Enable GitHub Auto-merge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "Enabling Auto-merge on PR #${{ github.event.pull_request.number }}"
           gh pr merge ${{ github.event.pull_request.number }} --auto --squash
