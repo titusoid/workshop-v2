@@ -1,55 +1,43 @@
-name: Enable Auto-merge when ready
+name: Merge when ready
 
 on:
   pull_request:
     branches: [ main ]
-    types: [labeled, edited, ready_for_review, reopened, synchronize]
+    types: [labeled, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted]
+  check_suite:
+    types: [completed]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
-  enable-auto-merge:
+  merge:
+    name: Auto merge if ready
     runs-on: ubuntu-latest
+    if: |
+      github.event_name != 'check_suite' &&
+      github.event.pull_request.base.ref == 'main' &&
+      !github.event.pull_request.draft &&
+      contains(github.event.pull_request.labels.*.name, 'merge')
     steps:
-      - name: Check merge preconditions
-        id: precheck
-        env:
-          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-          DRAFT:  ${{ github.event.pull_request.draft }}
-          BASE:   ${{ github.event.pull_request.base.ref }}
-        run: |
-          ok=true
-          [ "$DRAFT" = "true" ] && echo "PR is draft." && ok=false
-          [ "$BASE" != "main" ] && echo "PR base is not main." && ok=false
-          case ",$LABELS," in *,merge,*) ;; *) echo "Missing 'merge' label." && ok=false ;; esac
-          echo "ok=$ok" >> $GITHUB_OUTPUT
-          [ "$ok" = "true" ] || { echo "Auto-merge prerequisites not met."; exit 1; }
-
-      - name: Check approvals
-        id: approvals
+      - name: Merge PR (squash and delete branch) if all checks passed and approved
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO:     ${{ github.repository }}
           NUM:      ${{ github.event.pull_request.number }}
+          SHA:      ${{ github.event.pull_request.head.sha }}
         run: |
-          approved=$(gh pr view $NUM --repo "$REPO" --json reviews --jq '[.reviews[] | select(.state=="APPROVED") | .author.login] | unique | length')
-          echo "Approvals: $approved"
-          [ "$approved" -ge 1 ] || { echo "No approvals yet."; exit 1; }
+          # Count approvals
+          approvals=$(gh pr view "$NUM" --repo "$REPO" --json reviews \
+            --jq '[.reviews[] | select(.state=="APPROVED")] | length')
+          [ "$approvals" -ge 1 ] || { echo "No approvals yet"; exit 0; }
 
-      - name: Enable GitHub Auto-merge (squash)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO:     ${{ github.repository }}
-          NUM:      ${{ github.event.pull_request.number }}
-        run: |
-          gh pr merge "$NUM" --repo "$REPO" --auto --squash
+          # Ensure all required checks succeeded
+          state=$(gh api repos/$REPO/commits/$SHA/status --jq .state)
+          [ "$state" = "success" ] || { echo "Checks not all green"; exit 0; }
 
-      - name: Show PR merge state
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO:     ${{ github.repository }}
-          NUM:      ${{ github.event.pull_request.number }}
-        run: |
-          gh pr view "$NUM" --repo "$REPO" --json number,mergeStateStatus,autoMergeRequest,reviewDecision,isDraft,baseRefName --jq .
+          # Merge
+          gh pr merge "$NUM" --repo "$REPO" --squash --delete-branch --admin=false
