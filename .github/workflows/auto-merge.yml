@@ -1,21 +1,21 @@
-name: Merge when labeled and approved
+# .github/workflows/merge-on-merge-label.yml
+name: Enable auto-merge on label
 
 on:
   pull_request:
-    types: [labeled]   # only run when a label is added
+    types: [labeled]   # only runs when a label is added
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 jobs:
-  merge:
+  enable:
     if: >
       github.event.label.name == 'merge' &&
       github.event.pull_request.base.ref == 'main' &&
       !github.event.pull_request.draft
     runs-on: ubuntu-latest
-
     steps:
       - name: Require at least one approval
         env:
@@ -24,64 +24,13 @@ jobs:
           NUM:      ${{ github.event.pull_request.number }}
         run: |
           count=$(gh pr view "$NUM" --repo "$REPO" --json reviews \
-            --jq '[.reviews[] | select(.state=="APPROVED") | .author.login] | unique | length')
-          echo "Approvals: $count"
-          if [ "$count" -lt 1 ]; then
-            echo "No approvals yet."
-            exit 1
-          fi
+            --jq '[.reviews[] | select(.state=="APPROVED")] | length')
+          [ "$count" -ge 1 ] || { echo "No approvals yet"; exit 1; }
 
-      - name: Wait for PR CI + CodeQL checks (ignore this job)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO:     ${{ github.repository }}
-          SHA:      ${{ github.event.pull_request.head.sha }}
-        run: |
-          # Exact check-run names to require (as shown in PR "Checks" tab)
-          required_checks=(
-            "PR CI / lint"
-            "PR CI / semgrep_sast"
-            "PR CI / sbom_grype"
-            "CodeQL / Analyze (javascript)"
-          )
-
-          attempts=120   # ~20 minutes
-          sleep_secs=10
-
-          echo "Waiting for required check runs on $SHA ..."
-          for i in $(seq 1 $attempts); do
-            runs=$(gh api repos/$REPO/commits/$SHA/check-runs -H "Accept: application/vnd.github+json")
-
-            ok=1
-            for name in "${required_checks[@]}"; do
-              conclusion=$(echo "$runs" | jq --arg n "$name" -r '.check_runs[] | select(.name==$n) | .conclusion' | head -n1)
-              status=$(echo "$runs" | jq --arg n "$name" -r '.check_runs[] | select(.name==$n) | .status' | head -n1)
-              echo "$name => status=${status:-<missing>} conclusion=${conclusion:-<missing>}"
-
-              # Must exist, be completed, and success
-              if [ -z "$status" ] || [ -z "$conclusion" ] || [ "$status" != "completed" ] || [ "$conclusion" != "success" ]; then
-                ok=0
-              fi
-            done
-
-            if [ $ok -eq 1 ]; then
-              echo "All required check runs are green."
-              break
-            fi
-
-            sleep $sleep_secs
-          done
-
-          if [ $ok -ne 1 ]; then
-            echo "Timed out waiting for required check runs to succeed. Non-green checks:"
-            echo "$runs" | jq -r '.check_runs[] | select(.conclusion!="success") | {name, status, conclusion, html_url}'
-            exit 1
-          fi
-
-      - name: Merge (squash and delete branch)
+      - name: Enable GitHub Auto-merge (squash)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO:     ${{ github.repository }}
           NUM:      ${{ github.event.pull_request.number }}
         run: |
-          gh pr merge "$NUM" --repo "$REPO" --squash --delete-branch --admin=false
+          gh pr merge "$NUM" --repo "$REPO" --auto --squash
