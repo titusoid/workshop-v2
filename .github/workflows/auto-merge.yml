@@ -27,44 +27,54 @@ jobs:
             --jq '[.reviews[] | select(.state=="APPROVED") | .author.login] | unique | length')
           echo "Approvals: $count"
           if [ "$count" -lt 1 ]; then
-            echo "No approvals yet. Approve the PR and re-add the 'merge' label to retry."
+            echo "No approvals yet."
             exit 1
           fi
 
-      - name: Wait for required checks to pass (branch protection)
+      - name: Wait for PR CI + CodeQL checks (ignore this job)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO:     ${{ github.repository }}
           SHA:      ${{ github.event.pull_request.head.sha }}
         run: |
-          attempts=120   # ~20 minutes total
+          # Exact check-run names to require (as shown in PR "Checks" tab)
+          required_checks=(
+            "PR CI / lint"
+            "PR CI / semgrep_sast"
+            "PR CI / sbom_grype"
+            "CodeQL / Analyze (javascript)"
+          )
+
+          attempts=120   # ~20 minutes
           sleep_secs=10
 
-          echo "Waiting for required checks on $SHA ..."
+          echo "Waiting for required check runs on $SHA ..."
           for i in $(seq 1 $attempts); do
-            state=$(gh api repos/$REPO/commits/$SHA/status --jq .state)
-            echo "Attempt $i: combined status = $state"
-            case "$state" in
-              success)
-                echo "All required checks passed."
-                break
-                ;;
-              failure|error)
-                echo "A required check failed. Details:"
-                gh api repos/$REPO/commits/$SHA/check-runs -H "Accept: application/vnd.github+json" \
-                  --jq '.check_runs[] | select(.conclusion!="success") | {name, conclusion, status, html_url}'
-                exit 1
-                ;;
-              *)
-                sleep $sleep_secs
-                ;;
-            esac
+            runs=$(gh api repos/$REPO/commits/$SHA/check-runs -H "Accept: application/vnd.github+json")
+
+            ok=1
+            for name in "${required_checks[@]}"; do
+              conclusion=$(echo "$runs" | jq --arg n "$name" -r '.check_runs[] | select(.name==$n) | .conclusion' | head -n1)
+              status=$(echo "$runs" | jq --arg n "$name" -r '.check_runs[] | select(.name==$n) | .status' | head -n1)
+              echo "$name => status=${status:-<missing>} conclusion=${conclusion:-<missing>}"
+
+              # Must exist, be completed, and success
+              if [ -z "$status" ] || [ -z "$conclusion" ] || [ "$status" != "completed" ] || [ "$conclusion" != "success" ]; then
+                ok=0
+              fi
+            done
+
+            if [ $ok -eq 1 ]; then
+              echo "All required check runs are green."
+              break
+            fi
+
+            sleep $sleep_secs
           done
 
-          if [ "$state" != "success" ]; then
-            echo "Timed out waiting for checks to pass."
-            gh api repos/$REPO/commits/$SHA/check-runs -H "Accept: application/vnd.github+json" \
-              --jq '.check_runs[] | select(.conclusion!="success") | {name, conclusion, status, html_url}'
+          if [ $ok -ne 1 ]; then
+            echo "Timed out waiting for required check runs to succeed. Non-green checks:"
+            echo "$runs" | jq -r '.check_runs[] | select(.conclusion!="success") | {name, status, conclusion, html_url}'
             exit 1
           fi
 
