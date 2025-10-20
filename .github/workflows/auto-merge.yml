@@ -1,21 +1,56 @@
-name: Auto-merge labeled PRs
+# .github/workflows/enable-auto-merge.yml
+name: Enable auto-merge on label
+
 on:
   pull_request:
-    branches: [ main ]
-    types: [labeled, edited, ready_for_review, synchronize, reopened]
+    types: [labeled]  # run only when a label is added
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 jobs:
-  merge-when-approved:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'merge') && !github.event.pull_request.draft }}
+  enable:
+    if: >
+      github.event.label.name == 'merge' &&
+      github.event.pull_request.base.ref == 'main' &&
+      !github.event.pull_request.draft
     runs-on: ubuntu-latest
+
     steps:
-      - name: Merge PR
-        uses: pascalgn/automerge-action@v0.16.3
+      - name: Require at least one approval
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MERGE_LABELS: "merge"
-          MERGE_METHOD: "squash"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # read-only is fine here
+          REPO:     ${{ github.repository }}
+          NUM:      ${{ github.event.pull_request.number }}
+        run: |
+          count=$(gh pr view "$NUM" --repo "$REPO" --json reviews \
+            --jq '[.reviews[] | select(.state=="APPROVED")] | length')
+          echo "Approvals: $count"
+          if [ "$count" -lt 1 ]; then
+            echo "No approvals yet. Add an approval and re-add the 'merge' label to retry."
+            exit 1
+          fi
+
+      - name: Enable GitHub Auto-merge (squash) via PAT
+        env:
+          GH_TOKEN: ${{ secrets.BOT_PAT }}          # << set GH_TOKEN to your PAT
+          REPO:     ${{ github.repository }}
+          NUM:      ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "Missing BOT_PAT secret. Create a user PAT and add it as BOT_PAT."
+            exit 1
+          fi
+
+          # Get the PR's GraphQL node_id
+          pr_id=$(gh api repos/$REPO/pulls/$NUM --jq .node_id)
+
+          # Turn on Auto-merge with SQUASH (GitHub will merge once protections pass)
+          gh api graphql -f query='
+            mutation($pr:ID!,$m:PullRequestMergeMethod!){
+              enablePullRequestAutoMerge(input:{pullRequestId:$pr, mergeMethod:$m}){ clientMutationId }
+            }' -f pr="$pr_id" -f m=SQUASH
+
+          echo "Auto-merge enabled for PR #$NUM."

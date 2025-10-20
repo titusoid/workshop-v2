@@ -34,10 +34,11 @@ Generated: ${(grype.descriptor && grype.descriptor.timestamp) || 'n/a'}`;
     drawCharts();
     renderTables();
   } catch (e) {
-    meta.textContent = "No reports found. Using demo data.";
-    await loadDemo();
-    drawCharts();
-    renderTables();
+  console.error("Error loading reports:", e);
+  meta.textContent = "No reports found. Using demo data.";
+  await loadDemo();
+  drawCharts();
+  renderTables();
   }
 }
 
