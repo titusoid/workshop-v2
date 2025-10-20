@@ -1,9 +1,8 @@
-# .github/workflows/merge-on-merge-label.yml
 name: Enable auto-merge on label
 
 on:
   pull_request:
-    types: [labeled]   # only runs when a label is added
+    types: [labeled]  # only runs when a label is added
 
 permissions:
   contents: read
@@ -11,26 +10,49 @@ permissions:
 
 jobs:
   enable:
+    # Start only when the 'merge' label is applied, PR targets main, and it's not a draft
     if: >
       github.event.label.name == 'merge' &&
       github.event.pull_request.base.ref == 'main' &&
       !github.event.pull_request.draft
     runs-on: ubuntu-latest
+
     steps:
       - name: Require at least one approval
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # for read-only API calls
           REPO:     ${{ github.repository }}
           NUM:      ${{ github.event.pull_request.number }}
         run: |
           count=$(gh pr view "$NUM" --repo "$REPO" --json reviews \
-            --jq '[.reviews[] | select(.state=="APPROVED")] | length')
-          [ "$count" -ge 1 ] || { echo "No approvals yet"; exit 1; }
+            --jq '[.reviews[] | select(.state=="APPROVED") | .author.login] | unique | length')
+          echo "Approvals: $count"
+          if [ "$count" -lt 1 ]; then
+            echo "No approvals yet. Add an approval and re-add the 'merge' label to retry."
+            exit 1
+          fi
 
-      - name: Enable GitHub Auto-merge (squash)
+      - name: Enable GitHub Auto-merge (squash) via PAT
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO:     ${{ github.repository }}
-          NUM:      ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          NUM:  ${{ github.event.pull_request.number }}
+          PAT:  ${{ secrets.BOT_PAT }}  # <-- add this secret in repo settings
         run: |
-          gh pr merge "$NUM" --repo "$REPO" --auto --squash
+          set -euo pipefail
+          if [ -z "${PAT:-}" ]; then
+            echo "Missing BOT_PAT secret. Create a user PAT and add it as BOT_PAT."
+            exit 1
+          fi
+
+          # Get GraphQL node_id of the PR
+          pr_id=$(gh api repos/$REPO/pulls/$NUM --jq .node_id -H "Authorization: token $PAT")
+
+          # Turn on Auto-merge with SQUASH
+          gh api graphql -H "Authorization: token $PAT" -f query='
+            mutation($pr:ID!, $m:PullRequestMergeMethod!) {
+              enablePullRequestAutoMerge(input:{pullRequestId:$pr, mergeMethod:$m}) {
+                clientMutationId
+              }
+            }' -f pr="$pr_id" -f m=SQUASH
+
+          echo "Auto-merge enabled for PR #$NUM. GitHub will merge once all protections pass."
