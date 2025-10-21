@@ -4,64 +4,160 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Supply Chain Radar</title>
-  <meta name="color-scheme" content="dark light">
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, sans-serif;
+    }
+    body {
+      margin: 2rem;
+      background-color: #111;
+      color: #eee;
+    }
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 1rem;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    input[type="search"],
+    select {
+      background: #222;
+      color: #eee;
+      border: 1px solid #444;
+      padding: 0.3rem 0.5rem;
+      border-radius: 4px;
+    }
+    input[type="checkbox"] {
+      transform: scale(1.2);
+    }
+    button {
+      background: #333;
+      color: #eee;
+      border: 1px solid #555;
+      border-radius: 4px;
+      padding: 0.4rem 0.8rem;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #444;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+    }
+    th, td {
+      border-bottom: 1px solid #333;
+      padding: 0.4rem 0.6rem;
+      text-align: left;
+    }
+    th {
+      background: #1a1a1a;
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background: #1b1b1b;
+    }
+    a {
+      color: #58a6ff;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    .sev {
+      padding: 0.1rem 0.5rem;
+      border-radius: 0.4rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .sev-critical {
+      background: #b30000;
+      color: #fff;
+    }
+    .sev-high {
+      background: #cc3300;
+      color: #fff;
+    }
+    .sev-medium {
+      background: #d78d00;
+      color: #111;
+    }
+    .sev-low {
+      background: #4b9b4b;
+      color: #111;
+    }
+    .sev-unknown {
+      background: #555;
+      color: #eee;
+    }
+    #meta {
+      opacity: 0.7;
+    }
+    @media (max-width: 600px) {
+      body { margin: 1rem; }
+      table, thead, tbody, th, td, tr { display: block; }
+      th { display: none; }
+      td {
+        padding: 0.5rem;
+        border: none;
+        border-bottom: 1px solid #333;
+      }
+      td::before {
+        content: attr(data-label);
+        font-weight: bold;
+        display: block;
+        margin-bottom: 0.2rem;
+        opacity: 0.7;
+      }
+    }
+  </style>
 </head>
 <body>
-  <header class="topbar">
-    <h1>Supply Chain Radar</h1>
-    <h2>PR sample</h2>
-    <nav>
-      <button id="tab-dashboard" class="tab active">Dashboard</button>
-      <button id="tab-vulns" class="tab">Vulnerabilities</button>
-      <button id="tab-packages" class="tab">Packages</button>
-    </nav>
-  </header>
+  <h1>Supply Chain Radar</h1>
 
-  <main id="app" class="container">
-    <section id="dashboard" class="panel visible">
-      <div class="grid">
-        <div class="card">
-          <h2>Severity Overview</h2>
-          <div id="severityChart" class="chart"></div>
-        </div>
-        <div class="card">
-          <h2>Package Types</h2>
-          <div id="typeChart" class="chart"></div>
-        </div>
-        <div class="card">
-          <h2>Report Info</h2>
-          <div id="meta" class="meta"></div>
-        </div>
-      </div>
-    </section>
+  <div class="controls">
+    <input id="searchInput" type="search" placeholder="Filter by package or CVE" />
+    <select id="severityFilter">
+      <option value="all">All severities</option>
+      <option value="Critical">Critical</option>
+      <option value="High">High</option>
+      <option value="Medium">Medium</option>
+      <option value="Low">Low</option>
+    </select>
 
-    <section id="vulns" class="panel">
-      <div class="toolbar">
-        <input id="vulnFilter" placeholder="Filter by package or CVE…" />
-        <select id="sevFilter">
-          <option value="">All severities</option>
-          <option>Critical</option>
-          <option>High</option>
-          <option>Medium</option>
-          <option>Low</option>
-        </select>
-      </div>
-      <table id="vulnTable" class="data-table"></table>
-    </section>
+    <label style="display:flex;gap:.4rem;align-items:center;">
+      <input type="checkbox" id="group-by-cve" />
+      Group by CVE (dedupe)
+    </label>
 
-    <section id="packages" class="panel">
-      <div class="toolbar">
-        <input id="pkgFilter" placeholder="Filter packages…" />
-      </div>
-      <table id="pkgTable" class="data-table"></table>
-    </section>
-  </main>
+    <button id="reloadBtn">Reload</button>
 
-  <footer class="foot">
-    <span>Data source: <code>reports/sbom.cdx.json</code> & <code>reports/grype.json</code></span>
-    <button id="reload">Reload</button>
-  </footer>
+    <span id="meta"></span>
+    <span style="margin-left:auto; opacity:.7;">Rows: <strong id="vuln-count">0</strong></span>
+  </div>
 
-  <script type="module" src="/src/main.js"></script>
+  <table>
+    <thead>
+      <tr>
+        <th>CVE</th>
+        <th>Severity</th>
+        <th>Package</th>
+        <th>Version</th>
+        <th>Fixed in</th>
+      </tr>
+    </thead>
+    <tbody id="vuln-tbody">
+      <tr><td colspan="5" style="opacity:.7;">Loading...</td></tr>
+    </tbody>
+  </table>
+
+  <script type="module" src="./src/main.js"></script>
 </body>
 </html>
