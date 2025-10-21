@@ -55,3 +55,52 @@ jobs:
           path: |
             sbom.cdx.json
             grype.sarif
+
+
+  cosign_sign_test:
+      runs-on: ubuntu-latest
+      needs: sbom_grype
+      # Skip keyless signing for forked PRs (no OIDC token from forks)
+      if: ${{ github.event.pull_request.head.repo.fork == false }}
+      permissions:
+        id-token: write     # required for keyless
+        contents: read
+      steps:
+        - uses: actions/checkout@v4
+
+        # Recreate the SBOM path used by sbom_grype (or download its artifact)
+        - name: Install Syft (for parity if needed)
+          run: |
+            curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+            mkdir -p reports
+            # If sbom_grype uploaded sbom.cdx.json as artifact, download it instead of regenerating:
+            # uses: actions/download-artifact@v4
+            # with:
+            #   name: pr-reports
+
+        - name: Generate CycloneDX SBOM (fast)
+          run: syft dir:. -o cyclonedx-json=reports/sbom.cdx.json
+
+        - name: Install cosign
+          uses: sigstore/cosign-installer@v3.6.0
+          with:
+            cosign-release: 'v2.4.1'
+
+        - name: Try keyless sign (fail early on problems)
+          env:
+            COSIGN_EXPERIMENTAL: "1"
+            COSIGN_YES: "true"
+          run: |
+            cosign sign-blob \
+              --yes \
+              --bundle             reports/sbom.cdx.json.bundle \
+              --output-signature   reports/sbom.cdx.json.sig \
+              --output-certificate reports/sbom.cdx.json.pem \
+              reports/sbom.cdx.json
+
+        # Optional: upload signatures so you can inspect them in the PR
+        - uses: actions/upload-artifact@v4
+          with:
+            name: cosign-signatures
+            path: |
+              reports/sbom.cdx.json*
