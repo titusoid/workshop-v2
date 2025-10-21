@@ -1,4 +1,5 @@
 name: Build & Publish Pages
+
 on:
   push:
     branches: [ main ]
@@ -6,7 +7,7 @@ on:
 permissions:
   contents: read
   pages: write
-  id-token: write
+  id-token: write   # required for Sigstore keyless signing
 
 concurrency:
   group: "pages"
@@ -15,9 +16,13 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: "npm"
@@ -28,6 +33,7 @@ jobs:
 
       - name: Build app
         run: npm run build
+      # Your built files should now be in ./dist (adjust if different)
 
       # Generate SBOM + vulnerability scan
       - name: Install Syft & Grype
@@ -35,14 +41,15 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
 
-      - name: Generate SBOMs
+      - name: Generate SBOMs (SPDX + CycloneDX)
         run: |
           mkdir -p reports
           syft dir:. -o spdx-json=reports/sbom.spdx.json
           syft dir:. -o cyclonedx-json=reports/sbom.cdx.json
 
-      - name: Run vulnerability scan (Grype)
+      - name: Run vulnerability scan (Grype → JSON)
         run: |
+          # JSON format for your frontend; keep SARIF in PR CI flow
           grype sbom:reports/sbom.cdx.json --output json > reports/grype.json || true
 
       - name: Install cosign
@@ -63,10 +70,12 @@ jobs:
       - name: Prepare Pages artifact
         run: |
           mkdir -p site/reports
+          # app
           cp -r dist/* site/
+          # reports (SBOMs, Grype, signatures)
           cp -r reports/* site/reports/
 
-      - name: Upload to Pages
+      - name: Upload artifact to Pages
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
