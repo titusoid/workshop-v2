@@ -1,155 +1,221 @@
-import { renderSeverityChart, renderTypeChart } from './viz.js';
-import "./styles.css";
+// src/main.js
 
+// ---------- Config ----------
+const SBOM_URL = "./reports/sbom.cdx.json";
+const GRYPE_URL = "./reports/grype.json";
 
-const state = {
-  sbom: null,
-  grype: null,
-  vulns: [],
-  pkgs: []
-};
+// ---------- State ----------
+let vulnsRaw = [];     // one row per Grype match
+let viewMode = "pkg";  // "pkg" | "cve"
+let severityFilter = "all";
+let searchQuery = "";
 
-async function loadJSON(path){
-  const res = await fetch(path);
-  if(!res.ok) throw new Error(`Failed to fetch ${path}`);
+// ---------- Severity ranking ----------
+const SEV_RANK = { Critical: 4, High: 3, Medium: 2, Low: 1, Unknown: 0 };
+
+// ---------- Helpers ----------
+function bySeverityDesc(a, b) {
+  return SEV_RANK[b.severity] - SEV_RANK[a.severity] ||
+         a.cve.localeCompare(b.cve);
+}
+const fmt = (x) => (x == null ? "" : String(x));
+
+function nvdUrlFor(cve) {
+  return /^CVE-\d{4}-\d+$/i.test(cve) ? `https://nvd.nist.gov/vuln/detail/${cve}` : "";
+}
+function cveHref(v) {
+  return (v.urls && v.urls[0]) || nvdUrlFor(v.cve) || "";
+}
+
+function link(html, url) {
+  if (!url) return html;
+  const safe = String(url).replace(/"/g, "&quot;");
+  return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${html}</a>`;
+}
+
+// ---------- Deduping ----------
+function mergeArraysUnique(a = [], b = []) {
+  return [...new Set([...a, ...b].filter(Boolean))];
+}
+
+function dedupeByPkg(list) {
+  const seen = new Map();
+  for (const v of list) {
+    const key = `${v.cve}|${v.package}|${v.version}`;
+    const old = seen.get(key);
+    if (!old || SEV_RANK[v.severity] > SEV_RANK[old.severity]) {
+      seen.set(key, {
+        ...v,
+        urls: mergeArraysUnique(old?.urls, v.urls),
+        fixVersions: mergeArraysUnique(old?.fixVersions, v.fixVersions),
+      });
+    } else if (old) {
+      old.urls = mergeArraysUnique(old.urls, v.urls);
+      old.fixVersions = mergeArraysUnique(old.fixVersions, v.fixVersions);
+    }
+  }
+  return [...seen.values()];
+}
+
+function dedupeByCve(list) {
+  const best = new Map();
+  for (const v of list) {
+    const id = v.cve;
+    const old = best.get(id);
+    if (!old || SEV_RANK[v.severity] > SEV_RANK[old.severity]) {
+      best.set(id, {
+        ...v,
+        urls: mergeArraysUnique(old?.urls, v.urls),
+        fixVersions: mergeArraysUnique(old?.fixVersions, v.fixVersions),
+      });
+    } else if (old) {
+      old.urls = mergeArraysUnique(old.urls, v.urls);
+      old.fixVersions = mergeArraysUnique(old.fixVersions, v.fixVersions);
+    }
+  }
+  return [...best.values()];
+}
+
+// ---------- Filters ----------
+function applyFilters(list) {
+  let out = list;
+  if (severityFilter !== "all") {
+    out = out.filter(v => v.severity === severityFilter);
+  }
+  if (searchQuery.trim()) {
+    const q = searchQuery.trim().toLowerCase();
+    out = out.filter(v =>
+      v.cve.toLowerCase().includes(q) ||
+      v.package.toLowerCase().includes(q) ||
+      (v.version || "").toLowerCase().includes(q)
+    );
+  }
+  return out.sort(bySeverityDesc);
+}
+
+// ---------- Rendering ----------
+function renderVulnTable(list) {
+  const tbody = document.getElementById("vuln-tbody");
+  if (!tbody) return;
+
+  const rows = list.map(v => {
+    const url = cveHref(v);
+    const cveCell = link(fmt(v.cve), url);
+    const fixedIn = v.fixVersions && v.fixVersions.length ? v.fixVersions[0] : "";
+    return `
+      <tr>
+        <td>${cveCell}</td>
+        <td><span class="sev sev-${v.severity.toLowerCase()}">${v.severity}</span></td>
+        <td>${fmt(v.package)}</td>
+        <td>${fmt(v.version)}</td>
+        <td>${fmt(fixedIn)}</td>
+      </tr>
+    `;
+  });
+
+  tbody.innerHTML = rows.join("") || `
+    <tr><td colspan="5" style="opacity:.7">No results</td></tr>
+  `;
+
+  const countEl = document.getElementById("vuln-count");
+  if (countEl) countEl.textContent = String(list.length);
+}
+
+// ---------- Data loading ----------
+async function fetchJSON(url) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   return res.json();
 }
 
-const base = (import.meta.env && import.meta.env.BASE_URL) || "/";
+function shapeFromGrype(grype) {
+  // Expecting Grype JSON with "matches"
+  if (grype && Array.isArray(grype.matches)) {
+    return grype.matches.map(m => {
+      const vuln = m?.vulnerability || {};
+      const art  = m?.artifact || {};
+      const fix  = vuln?.fix || {};
+      return {
+        cve: vuln.id || m?.id || "UNKNOWN",
+        severity: vuln.severity || "Unknown",
+        package: art.name || art.pkg?.name || "unknown",
+        version: art.version || art.pkg?.version || "",
+        urls: mergeArraysUnique(vuln.urls, [vuln.dataSource]),
+        fixVersions: Array.isArray(fix.versions) ? fix.versions : [],
+      };
+    });
+  }
 
-async function loadData() {
+  console.warn("Unrecognized Grype format; raw object:", grype);
+  return [];
+}
+
+async function loadReports() {
   const meta = document.getElementById("meta");
-  meta.textContent = "Loading reports…";
   try {
-    const [sbom, grype] = await Promise.all([
-      loadJSON(base + "reports/sbom.cdx.json"),
-      loadJSON(base + "reports/grype.json")
-    ]);
-    state.sbom = sbom;
-    state.grype = grype;
-    parseData();
-    meta.textContent = `Packages: ${state.pkgs.length}
-Vulnerabilities: ${state.vulns.length}
-Generated: ${(grype.descriptor && grype.descriptor.timestamp) || 'n/a'}`;
-    drawCharts();
-    renderTables();
+    // SBOM not required for table, but we keep this to validate availability
+    await fetchJSON(SBOM_URL).catch(() => null);
+
+    const grype = await fetchJSON(GRYPE_URL);
+    vulnsRaw = shapeFromGrype(grype);
+
+    if (meta) {
+      meta.textContent = `Data source: ${SBOM_URL} & ${GRYPE_URL} (${vulnsRaw.length} matches)`;
+    }
   } catch (e) {
-  console.error("Error loading reports:", e);
-  meta.textContent = "No reports found. Using demo data.";
-  await loadDemo();
-  drawCharts();
-  renderTables();
+    console.error("Failed loading reports:", e);
+    if (meta) meta.textContent = "No reports found. Using demo data.";
+    vulnsRaw = [{
+      cve: "DEMO-0000",
+      severity: "Medium",
+      package: "demo",
+      version: "1.0.0",
+      urls: [ "https://example.com" ],
+      fixVersions: ["1.0.1"],
+    }];
   }
 }
 
-
-async function loadDemo(){
-  const demoSBOM = {
-    bomFormat:"CycloneDX",
-    components:[
-      { name:"react", version:"18.2.0", type:"library", purl:"pkg:npm/react@18.2.0" },
-      { name:"vite", version:"5.4.0", type:"application", purl:"pkg:npm/vite@5.4.0" },
-      { name:"eslint", version:"9.13.0", type:"library", purl:"pkg:npm/eslint@9.13.0" }
-    ]
-  };
-  const demoGrype = {
-    matches:[
-      { vulnerability:{id:"CVE-2024-1234", severity:"High"}, artifact:{name:"react", version:"18.2.0"} },
-      { vulnerability:{id:"CVE-2025-1111", severity:"Medium"}, artifact:{name:"vite", version:"5.4.0"} }
-    ],
-    descriptor:{ timestamp:new Date().toISOString() }
-  };
-  state.sbom = demoSBOM;
-  state.grype = demoGrype;
-  parseData();
+// ---------- Controller ----------
+function currentView(listRaw) {
+  const base = viewMode === "cve" ? dedupeByCve(listRaw) : dedupeByPkg(listRaw);
+  return applyFilters(base);
 }
 
-function parseData(){
-  const comps = (state.sbom.components || []);
-  state.pkgs = comps.map(c => ({ name:c.name, version:c.version, type:c.type || 'library' }));
-  const matches = (state.grype.matches || []);
-  state.vulns = matches.map(m => ({
-    id: m.vulnerability?.id || 'N/A',
-    severity: m.vulnerability?.severity || 'Unknown',
-    pkg: m.artifact?.name || 'unknown',
-    version: m.artifact?.version || ''
-  }));
+function rerender() {
+  renderVulnTable(currentView(vulnsRaw));
 }
 
-function drawCharts(){
-  const severities = ['Critical','High','Medium','Low'];
-  const counts = Object.fromEntries(severities.map(s=>[s,0]));
-  state.vulns.forEach(v => { if(counts[v.severity] !== undefined) counts[v.severity]++; });
-  renderSeverityChart(document.getElementById('severityChart'), counts);
-
-  const byType = {};
-  state.pkgs.forEach(p => { byType[p.type] = (byType[p.type]||0)+1; });
-  renderTypeChart(document.getElementById('typeChart'), byType);
-}
-
-function renderTables(){
-  // Vulnerabilities
-  const vt = document.getElementById('vulnTable');
-  vt.innerHTML = '<tr><th>CVE</th><th>Severity</th><th>Package</th><th>Version</th></tr>' +
-    state.vulns.map(v => `<tr>
-      <td>${v.id}</td>
-      <td><span class="badge ${v.severity}">${v.severity}</span></td>
-      <td>${v.pkg}</td>
-      <td>${v.version}</td>
-    </tr>`).join('');
-
-  // Packages
-  const pt = document.getElementById('pkgTable');
-  pt.innerHTML = '<tr><th>Package</th><th>Version</th><th>Type</th></tr>' +
-    state.pkgs.map(p => `<tr><td>${p.name}</td><td>${p.version}</td><td>${p.type}</td></tr>`).join('');
-
-  // Filters
-  const vFilter = document.getElementById('vulnFilter');
-  const sFilter = document.getElementById('sevFilter');
-  vFilter.oninput = () => applyVulnFilter();
-  sFilter.onchange = () => applyVulnFilter();
-  const pFilter = document.getElementById('pkgFilter');
-  pFilter.oninput = () => applyPkgFilter();
-}
-
-function applyVulnFilter(){
-  const term = (document.getElementById('vulnFilter').value || '').toLowerCase();
-  const sev = document.getElementById('sevFilter').value;
-  const vt = document.getElementById('vulnTable');
-  vt.querySelectorAll('tr').forEach((tr,i) => {
-    if(i===0) return;
-    const [cve, sevTd, pkg, ver] = tr.children;
-    const matchTerm = [cve.textContent, pkg.textContent, ver.textContent].join(' ').toLowerCase().includes(term);
-    const matchSev = !sev || sevTd.textContent.trim()===sev;
-    tr.style.display = (matchTerm && matchSev) ? '' : 'none';
+// ---------- Wire up UI ----------
+function setupUI() {
+  const groupToggle = document.getElementById("group-by-cve");
+  if (groupToggle) groupToggle.addEventListener("change", (e) => {
+    viewMode = e.target.checked ? "cve" : "pkg";
+    rerender();
   });
-}
-function applyPkgFilter(){
-  const term = (document.getElementById('pkgFilter').value || '').toLowerCase();
-  const pt = document.getElementById('pkgTable');
-  pt.querySelectorAll('tr').forEach((tr,i) => {
-    if(i===0) return;
-    tr.style.display = tr.textContent.toLowerCase().includes(term) ? '' : 'none';
+
+  const sevSel = document.getElementById("severityFilter");
+  if (sevSel) sevSel.addEventListener("change", (e) => {
+    severityFilter = e.target.value;
+    rerender();
+  });
+
+  const search = document.getElementById("searchInput");
+  if (search) search.addEventListener("input", (e) => {
+    searchQuery = e.target.value || "";
+    rerender();
+  });
+
+  const reloadBtn = document.getElementById("reloadBtn");
+  if (reloadBtn) reloadBtn.addEventListener("click", async () => {
+    await loadReports();
+    rerender();
   });
 }
 
-// Tabs
-function setupTabs(){
-  const tabs = {
-    'tab-dashboard':'dashboard',
-    'tab-vulns':'vulns',
-    'tab-packages':'packages'
-  };
-  Object.entries(tabs).forEach(([btnId, panelId]) => {
-    document.getElementById(btnId).onclick = () => {
-      document.querySelectorAll('nav .tab').forEach(b=>b.classList.remove('active'));
-      document.getElementById(btnId).classList.add('active');
-      document.querySelectorAll('.panel').forEach(p=>p.classList.remove('visible'));
-      document.getElementById(panelId).classList.add('visible');
-    };
-  });
-}
-
-document.getElementById('reload').onclick = loadData;
-setupTabs();
-loadData();
+// ---------- Init ----------
+(async function init() {
+  setupUI();
+  await loadReports();
+  rerender();
+})();
