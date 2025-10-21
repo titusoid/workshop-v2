@@ -2,120 +2,43 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Supply Chain Radar</title>
   <style>
-    :root {
-      color-scheme: dark;
-      font-family: system-ui, sans-serif;
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin: 2rem; background: #111; color: #eee; }
+    h1 { font-size: 1.8rem; margin-bottom: .75rem; }
+    .controls, .downloads {
+      display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin: .75rem 0;
     }
-    body {
-      margin: 2rem;
-      background-color: #111;
-      color: #eee;
+    input[type="search"], select {
+      background:#222; color:#eee; border:1px solid #444; padding:.35rem .55rem; border-radius:6px;
     }
-    h1 {
-      font-size: 1.8rem;
-      margin-bottom: 1rem;
+    input[type="checkbox"] { transform: scale(1.2); }
+    .btn {
+      background:#333; color:#eee; border:1px solid #555; border-radius:6px;
+      padding:.45rem .8rem; text-decoration:none; display:inline-flex; align-items:center; gap:.4rem;
     }
-    .controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.75rem;
-      align-items: center;
-      margin-bottom: 1rem;
-    }
-    input[type="search"],
-    select {
-      background: #222;
-      color: #eee;
-      border: 1px solid #444;
-      padding: 0.3rem 0.5rem;
-      border-radius: 4px;
-    }
-    input[type="checkbox"] {
-      transform: scale(1.2);
-    }
-    button {
-      background: #333;
-      color: #eee;
-      border: 1px solid #555;
-      border-radius: 4px;
-      padding: 0.4rem 0.8rem;
-      cursor: pointer;
-    }
-    button:hover {
-      background: #444;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 1rem;
-    }
-    th, td {
-      border-bottom: 1px solid #333;
-      padding: 0.4rem 0.6rem;
-      text-align: left;
-    }
-    th {
-      background: #1a1a1a;
-      font-weight: 600;
-    }
-    tr:nth-child(even) {
-      background: #1b1b1b;
-    }
-    a {
-      color: #58a6ff;
-      text-decoration: none;
-    }
-    a:hover {
-      text-decoration: underline;
-    }
-    .sev {
-      padding: 0.1rem 0.5rem;
-      border-radius: 0.4rem;
-      font-size: 0.85rem;
-      font-weight: 600;
-    }
-    .sev-critical {
-      background: #b30000;
-      color: #fff;
-    }
-    .sev-high {
-      background: #cc3300;
-      color: #fff;
-    }
-    .sev-medium {
-      background: #d78d00;
-      color: #111;
-    }
-    .sev-low {
-      background: #4b9b4b;
-      color: #111;
-    }
-    .sev-unknown {
-      background: #555;
-      color: #eee;
-    }
-    #meta {
-      opacity: 0.7;
-    }
-    @media (max-width: 600px) {
+    .btn:hover { background:#444; }
+    table { width:100%; border-collapse: collapse; margin-top: .5rem; }
+    th, td { border-bottom:1px solid #2a2a2a; padding:.5rem .6rem; text-align:left; }
+    th { background:#1a1a1a; font-weight:600; }
+    tr:nth-child(even) { background:#171717; }
+    a { color:#58a6ff; text-decoration:none; }
+    a:hover { text-decoration: underline; }
+    .sev { padding:.1rem .5rem; border-radius:.4rem; font-size:.85rem; font-weight:600; }
+    .sev-critical { background:#b30000; color:#fff; }
+    .sev-high { background:#cc3300; color:#fff; }
+    .sev-medium { background:#d78d00; color:#111; }
+    .sev-low { background:#4b9b4b; color:#111; }
+    .sev-unknown { background:#555; color:#eee; }
+    #meta { opacity:.7; }
+    @media (max-width: 720px) {
       body { margin: 1rem; }
-      table, thead, tbody, th, td, tr { display: block; }
-      th { display: none; }
-      td {
-        padding: 0.5rem;
-        border: none;
-        border-bottom: 1px solid #333;
-      }
-      td::before {
-        content: attr(data-label);
-        font-weight: bold;
-        display: block;
-        margin-bottom: 0.2rem;
-        opacity: 0.7;
-      }
+      table, thead, tbody, th, td, tr { display:block; }
+      th { display:none; }
+      td { border:none; border-bottom:1px solid #2a2a2a; }
+      td::before { content: attr(data-label); font-weight:600; display:block; margin-bottom:.2rem; opacity:.7; }
     }
   </style>
 </head>
@@ -123,7 +46,7 @@
   <h1>Supply Chain Radar</h1>
 
   <div class="controls">
-    <input id="searchInput" type="search" placeholder="Filter by package or CVE" />
+    <input id="searchInput" type="search" placeholder="Filter by package or CVE"/>
     <select id="severityFilter">
       <option value="all">All severities</option>
       <option value="Critical">Critical</option>
@@ -133,14 +56,24 @@
     </select>
 
     <label style="display:flex;gap:.4rem;align-items:center;">
-      <input type="checkbox" id="group-by-cve" />
+      <input type="checkbox" id="group-by-cve"/>
       Group by CVE (dedupe)
     </label>
 
-    <button id="reloadBtn">Reload</button>
+    <button class="btn" id="reloadBtn">Reload</button>
 
     <span id="meta"></span>
-    <span style="margin-left:auto; opacity:.7;">Rows: <strong id="vuln-count">0</strong></span>
+    <span style="margin-left:auto; opacity:.8;">Rows: <strong id="vuln-count">0</strong></span>
+  </div>
+
+  <div class="downloads">
+    <a id="dl-cdx"   class="btn" href="./reports/sbom.cdx.json"  download>⬇ CycloneDX SBOM (JSON)</a>
+    <a id="dl-spdx"  class="btn" href="./reports/sbom.spdx.json" download>⬇ SPDX SBOM (JSON)</a>
+    <a id="dl-grype" class="btn" href="./reports/grype.json"     download>⬇ Grype report (JSON)</a>
+
+    <a id="dl-cdx-sig" class="btn" href="./reports/sbom.cdx.json.sig" download style="display:none;">🔏 SBOM signature (.sig)</a>
+    <a id="dl-cdx-pem" class="btn" href="./reports/sbom.cdx.json.pem" download style="display:none;">📜 Signing cert (.pem)</a>
+    <span id="sig-badge" style="display:none; margin-left:.25rem; opacity:.85;">🔐 SBOM signed (Sigstore)</span>
   </div>
 
   <table>
