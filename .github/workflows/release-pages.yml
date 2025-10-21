@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
   pages: write
-  id-token: write   # required for Sigstore keyless signing
+  id-token: write     # required for Sigstore keyless (Fulcio)
 
 concurrency:
   group: "pages"
@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 0) Checkout + Node
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -27,15 +28,15 @@ jobs:
           node-version: 20
           cache: "npm"
 
-      # Install & build frontend
+      # 1) Build your static site (dist/)
       - name: Install dependencies
         run: npm ci
 
       - name: Build app
         run: npm run build
-      # Your built files should now be in ./dist (adjust if different)
+      # -> built files in ./dist
 
-      # Generate SBOM + vulnerability scan
+      # 2) Supply-chain: SBOM + vuln scan (reports/)
       - name: Install Syft & Grype
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
@@ -49,30 +50,48 @@ jobs:
 
       - name: Run vulnerability scan (Grype → JSON)
         run: |
-          # JSON format for your frontend; keep SARIF in PR CI flow
+          # JSON for your frontend; SARIF lives in PR CI
           grype sbom:reports/sbom.cdx.json --output json > reports/grype.json || true
 
-      - name: Install cosign
+      # 3) Sign artifacts with Cosign (keyless)
+      - name: Install cosign (pinned)
         run: |
-          COSIGN_VERSION=$(curl -s https://api.github.com/repos/sigstore/cosign/releases/latest | jq -r .tag_name)
-          curl -sSL https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64 > /usr/local/bin/cosign
-          chmod +x /usr/local/bin/cosign
+          COSIGN_VERSION=v2.4.1
+          curl -sSL -o cosign.tgz https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64.tar.gz
+          sudo tar -C /usr/local/bin -xzf cosign.tgz cosign
+          cosign version
 
-      - name: Sign CycloneDX SBOM (keyless)
+      - name: Create site checksum
+        run: |
+          # Stable, small blob to sign representing the built site
+          (cd dist && find . -type f -print0 | sort -z | xargs -0 sha256sum) > reports/site.sha256
+
+      - name: Sign SBOM + checksum (keyless)
         env:
           COSIGN_EXPERIMENTAL: "1"
+          COSIGN_YES: "true"
         run: |
-          cosign sign-blob --yes reports/sbom.cdx.json \
-            --output-signature reports/sbom.cdx.json.sig \
-            --output-certificate reports/sbom.cdx.json.pem
+          # Sign CycloneDX SBOM
+          cosign sign-blob \
+            --yes \
+            --bundle             reports/sbom.cdx.json.bundle \
+            --output-signature   reports/sbom.cdx.json.sig \
+            --output-certificate reports/sbom.cdx.json.pem \
+            reports/sbom.cdx.json
 
-      # Stage build + reports for Pages
+          # Sign site checksum
+          cosign sign-blob \
+            --yes \
+            --bundle             reports/site.sha256.bundle \
+            --output-signature   reports/site.sha256.sig \
+            --output-certificate reports/site.sha256.pem \
+            reports/site.sha256
+
+      # 4) Stage for Pages (site/)
       - name: Prepare Pages artifact
         run: |
           mkdir -p site/reports
-          # app
           cp -r dist/* site/
-          # reports (SBOMs, Grype, signatures)
           cp -r reports/* site/reports/
 
       - name: Upload artifact to Pages
