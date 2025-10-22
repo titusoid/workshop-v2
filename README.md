@@ -12,3 +12,5 @@ npm run dev
 Enable **GitHub Pages → Build and deployment → Source: GitHub Actions**.
 Push to `main` and the `release-pages.yml` will build and publish.
 Nightly monitor populates `reports/` with fresh data.
+
+sample update
